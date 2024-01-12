@@ -1,0 +1,16 @@
+2e387b887583b2f42d37782a06acf876 *DESCRIPTION
+ec07ec4b4bf056597405ba8129039c54 *NAMESPACE
+c2c783c138eee743e396a1b90ebeb5f1 *R/pred.transsmap.R
+33a27b6e21ab7e8e5fa1ca4b80239ee8 *R/simdata.gen.R
+766cd3877db132fcb374d19ea16240df *R/trans.smap.R
+0a6cc85aa6b1e7b6f7822c8c698bfc19 *README.md
+272e7756be8cca4fb5a1be36ef9bc918 *build/vignette.rds
+7a44a1bae3262d70e2bcf4ef325a96ac *inst/doc/matrans-vignette.R
+eea57c2cf3d2ea7302d51662cb0bba08 *inst/doc/matrans-vignette.Rmd
+c9e1001e8413f789d53254fb802b010b *inst/doc/matrans-vignette.pdf
+32cb276b6dcaf4f2afe9e06868a42cfa *man/figures/README-pressure-1.png
+218df52332b91e6bda2d10db1590627b *man/pred.transsmap.Rd
+9702d8634a3ce3dd7557bbed013fc89e *man/simdata.gen.Rd
+18c7cffc13b10cf7f0d38fa146a13ee4 *man/trans.smap.Rd
+6d5bcc38a1c242ec34c58d4b237e5ef3 *vignettes/flowchart.png
+eea57c2cf3d2ea7302d51662cb0bba08 *vignettes/matrans-vignette.Rmd
