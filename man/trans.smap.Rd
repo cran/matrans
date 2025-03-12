@@ -4,7 +4,14 @@
 \alias{trans.smap}
 \title{Parameter-transfer learning for partially linear models based on semiparametric model averaging.}
 \usage{
-trans.smap(train.data, nfold = NULL, bs.para, lm.set = NULL)
+trans.smap(
+  train.data,
+  nfold = NULL,
+  bs.para,
+  lm.set = NULL,
+  if.penalty = FALSE,
+  pen.para
+)
 }
 \arguments{
 \item{train.data}{a list containing the observations of predictors and response for fitting models. Should be a list with elements "data.y", "data.x" and "data.z", where "data.y" indicates a response list for all data sources, "data.x" indicates a parametric predictor list for all data sources, and "data.z" indicates a nonparametric predictor list for all data sources. Each element in "data.x" and "data.z" is a matrix with each row as an observation and each column as a variable. By default, the first element in "data.y", "data.x" and "data.z" is target data, and others are source data.}
@@ -18,6 +25,14 @@ trans.smap(train.data, nfold = NULL, bs.para, lm.set = NULL)
 }}
 
 \item{lm.set}{the vector of indices for the linear regression models, which means the corresponding models are constructed by ordinary linear models instead of partially linear models. Default is NULL.}
+
+\item{if.penalty}{If TRUE,then LASSO estimation is done under the linear regression settings, and the input data in "train.data" only constains "data.y" and "data.x". Default is FALSE.}
+
+\item{pen.para}{a list containing the main parameters for k-fold cross-validation for \code{glmnet}. Should be a list with elements "pen.nfold" and "pen.lambda".
+\itemize{
+\item "pen.nfold": the number of folds for the cross-validation criterion to determine the tuning parameters. Default is 8.
+\item "pen.lambda": Optional user-supplied lambda sequence; Default is NULL. The details can be referred to the arguments in function \code{cv.glmnet}.
+}}
 }
 \value{
 a result list containing the estimated weight vector, the execution time of solving the optimal weights and the summarized results of fitting models.

@@ -10,12 +10,14 @@
 #' \item "bs.degree": degree of the piecewise polynomial for each nonparametric component; The default is 3 for cubic splines.
 #' }
 #' @param if.lm the logical variable, whether to set the target model as ordinary linear model. Default is False.
+#' @param if.penalty If TRUE,then LASSO estimation is done under the linear regression settings, and the "newdata" only constains "data.x". Default is FALSE.
 #'
 #' @return a result list containing the predicted values on new data and the estimated coefficient vector.
 #' @seealso \code{\link{trans.smap}}.
 #' @references Hu, X., & Zhang, X. (2023). Optimal Parameter-Transfer Learning by Semiparametric Model Averaging. Journal of Machine Learning Research, 24(358), 1-53.
 #' @export
 #' @importFrom splines bs
+#' @importFrom stats predict
 #'
 #' @examples
 #' ## correct target model setting
@@ -83,38 +85,59 @@
 #' pred.val <- pred.res$predict.val
 #' predict.risk <- sum((pred.val - data.test$data.x %*% data.test$beta.true - data.test$gz.te)^2) / 500
 #' }
-pred.transsmap <- function(object, newdata, bs.para, if.lm = FALSE) {
-  q <- ncol(newdata$data.z)
+pred.transsmap <- function(object, newdata, bs.para, if.lm = FALSE, if.penalty = FALSE) {
   p <- ncol(newdata$data.x)
   size.test <- nrow(newdata$data.x)
-  bs.df <- bs.para$bs.df
-  bs.degree <- bs.para$bs.degree
   reg.res <- object$reg.res
   ma.weights <- object$weight.est
 
-  beta.est.train.mat <- matrix(NA, p, length(reg.res))
-  for (k in 1:length(reg.res)) {
-    beta.est.train.mat[, k] <- reg.res[[k]]$coefficients[2:(p + 1)]
-  }
-  beta.ma <- beta.est.train.mat %*% as.matrix(ma.weights)
-
-  if (if.lm) {
-    nonpara.est <- newdata$data.z %*% reg.res[[1]]$coefficients[(p + 2):length(reg.res[[1]]$coefficients)]
-  } else {
-    bsz.tar <- NULL
-    for (j in 1:q) {
-      bsz.tar <- cbind(bsz.tar, bs(newdata$data.z[, j], df = bs.df[j], degree = bs.degree[j]))
+  if (if.penalty) {
+    beta.est.train.mat <- matrix(NA, p, length(reg.res))
+    for (k in 1:length(reg.res)) {
+      coef_lasso_all <- predict(reg.res[[k]], s = "lambda.min", type = "coefficients")
+      beta.est.train.mat[, k] <- coef_lasso_all[-1]
     }
-    nonpara.est <- bsz.tar %*% reg.res[[1]]$coefficients[(p + 2):length(reg.res[[1]]$coefficients)]
-  }
+    beta.ma <- beta.est.train.mat %*% as.matrix(ma.weights)
 
-  if (all(is.na(ma.weights))) {
-    return(list(predict.val = NA, beta.ma = NA))
+    if (all(is.na(ma.weights))) {
+      return(list(predict.val = NA, beta.ma = NA))
+    } else {
+      tar_coef <- predict(reg.res[[1]], s = "lambda.min", type = "coefficients")
+      predict.val <- (newdata$data.x %*% beta.est.train.mat + tar_coef[1]) %*% as.matrix(ma.weights)
+      return(list(
+        predict.val = predict.val,
+        beta.ma = beta.ma
+      ))
+    }
   } else {
-    predict.val <- (newdata$data.x %*% beta.est.train.mat + matrix(rep(reg.res[[1]]$coefficients[1] + nonpara.est, length(reg.res)), size.test, length(reg.res))) %*% as.matrix(ma.weights)
-    return(list(
-      predict.val = predict.val,
-      beta.ma = beta.ma
-    ))
+    q <- ncol(newdata$data.z)
+    bs.df <- bs.para$bs.df
+    bs.degree <- bs.para$bs.degree
+
+    beta.est.train.mat <- matrix(NA, p, length(reg.res))
+    for (k in 1:length(reg.res)) {
+      beta.est.train.mat[, k] <- reg.res[[k]]$coefficients[2:(p + 1)]
+    }
+    beta.ma <- beta.est.train.mat %*% as.matrix(ma.weights)
+
+    if (if.lm) {
+      nonpara.est <- newdata$data.z %*% reg.res[[1]]$coefficients[(p + 2):length(reg.res[[1]]$coefficients)]
+    } else {
+      bsz.tar <- NULL
+      for (j in 1:q) {
+        bsz.tar <- cbind(bsz.tar, bs(newdata$data.z[, j], df = bs.df[j], degree = bs.degree[j]))
+      }
+      nonpara.est <- bsz.tar %*% reg.res[[1]]$coefficients[(p + 2):length(reg.res[[1]]$coefficients)]
+    }
+
+    if (all(is.na(ma.weights))) {
+      return(list(predict.val = NA, beta.ma = NA))
+    } else {
+      predict.val <- (newdata$data.x %*% beta.est.train.mat + matrix(rep(reg.res[[1]]$coefficients[1] + nonpara.est, length(reg.res)), size.test, length(reg.res))) %*% as.matrix(ma.weights)
+      return(list(
+        predict.val = predict.val,
+        beta.ma = beta.ma
+      ))
+    }
   }
 }

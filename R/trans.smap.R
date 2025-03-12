@@ -10,6 +10,12 @@
 #' \item "bs.degree": degree of the piecewise polynomial for each nonparametric component; The default is 3 for cubic splines.
 #' }
 #' @param lm.set the vector of indices for the linear regression models, which means the corresponding models are constructed by ordinary linear models instead of partially linear models. Default is NULL.
+#' @param if.penalty If TRUE,then LASSO estimation is done under the linear regression settings, and the input data in "train.data" only constains "data.y" and "data.x". Default is FALSE.
+#' @param pen.para a list containing the main parameters for k-fold cross-validation for \code{glmnet}. Should be a list with elements "pen.nfold" and "pen.lambda".
+#' \itemize{
+#' \item "pen.nfold": the number of folds for the cross-validation criterion to determine the tuning parameters. Default is 8.
+#' \item "pen.lambda": Optional user-supplied lambda sequence; Default is NULL. The details can be referred to the arguments in function \code{cv.glmnet}.
+#' }
 #'
 #' @return a result list containing the estimated weight vector, the execution time of solving the optimal weights and the summarized results of fitting models.
 #' @references Hu, X., & Zhang, X. (2023). Optimal Parameter-Transfer Learning by Semiparametric Model Averaging. Journal of Machine Learning Research, 24(358), 1-53.
@@ -18,7 +24,9 @@
 #' @importFrom quadprog solve.QP
 #' @importFrom stats lm
 #' @importFrom stats as.formula
+#' @importFrom stats predict
 #' @importFrom caret createFolds
+#' @importFrom glmnet cv.glmnet
 #'
 #' @examples
 #' ## correct target model setting
@@ -68,69 +76,40 @@
 #' )
 #' ma.weights <- fit.transsmap$weight.est
 #' }
-trans.smap <- function(train.data, nfold = NULL, bs.para, lm.set = NULL) {
+trans.smap <- function(train.data, nfold = NULL, bs.para, lm.set = NULL, if.penalty = FALSE, pen.para) {
   s.cnt <- length(train.data$data.y)
   p <- ncol(train.data$data.x[[1]])
   size.train <- sapply(train.data$data.x, function(x) nrow(x))
-  bs.df <- bs.para$bs.df
-  bs.degree <- bs.para$bs.degree
-  xstring <- paste(paste("x", 1:p, sep = ""), collapse = "+")
-  reg.res <- vector(mode = "list", length = s.cnt)
-  for (k in 1:s.cnt) {
-    data.merge <- cbind(train.data$data.y[[k]], train.data$data.x[[k]], train.data$data.z[[k]])
-    data.train.frame <- as.data.frame(data.merge)
-    colnames(data.train.frame) <- c("respon", paste("x", 1:p, sep = ""), paste("z", 1:ncol(train.data$data.z[[k]]), sep = ""))
-    if (k %in% lm.set) {
-      reg.res[[k]] <- lm(respon ~ ., data = data.train.frame)
-    } else {
-      zstring <- paste(paste(paste("bs(", paste(paste("z", 1:ncol(train.data$data.z[[k]]), sep = ""),
-        paste("df = bs.df[", 1:ncol(train.data$data.z[[k]]), "]", sep = ""),
-        paste("degree = bs.degree[", 1:ncol(train.data$data.z[[k]]), "]", sep = ""),
-        sep = ","
-      ), sep = ""), ")", sep = ""), collapse = "+")
-      reg.res[[k]] <- lm(as.formula(paste("respon~", paste(xstring, zstring, sep = "+"), sep = "")), data = data.train.frame)
-    }
-  }
 
-  if (is.null(lm.set)) {
+  if (if.penalty) {
+    pen.nfold <- pen.para$pen.nfold
+    pen.lambda <- pen.para$pen.lambda
+    reg.res <- vector(mode = "list", length = s.cnt)
+    for (k in 1:s.cnt) {
+      reg.res[[k]] <- cv.glmnet(train.data$data.x[[k]], train.data$data.y[[k]], nfolds = pen.nfold, lambda = pen.lambda)
+    }
+
     ## jackknife
     if (is.null(nfold)) {
       timestart <- Sys.time()
       proj.mat <- matrix(0, s.cnt, s.cnt)
       for (i in 1:size.train[1]) {
         train.data.cv <- train.data
+        train.data.cv$data.x[[1]] <- train.data.cv$data.x[[1]][-i, ]
+        train.data.cv$data.y[[1]] <- train.data.cv$data.y[[1]][-i, ]
+        n.vec.cv <- sapply(train.data.cv$data.x, function(x) nrow(x))
         est.beta <- matrix(NA, nrow = s.cnt, ncol = p)
-        lm.tr <- vector(mode = "list", length = s.cnt)
+        coef_lasso_all_cv <- vector(mode = "list", length = s.cnt)
         for (j in 1:s.cnt) {
-          if (j == 1) {
-            data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
-            data.merge.cv <- data.merge.cv[-i, ]
-          } else {
-            data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
-          }
-          qz <- ncol(train.data.cv$data.z[[j]])
-          datalm <- as.data.frame(data.merge.cv)
-          colnames(datalm) <- c("respon", paste("x", 1:p, sep = ""), paste("z", 1:qz, sep = ""))
-          xstring <- paste(paste("x", 1:p, sep = ""), collapse = "+")
-          zstring <- paste(paste(paste("bs(", paste(paste("z", 1:qz, sep = ""),
-            paste("df = bs.df[", 1:qz, "]", sep = ""),
-            paste("degree = bs.degree[", 1:qz, "]", sep = ""),
-            sep = ","
-          ), sep = ""), ")", sep = ""), collapse = "+")
-          lm.tr[[j]] <- lm(as.formula(paste("respon~", paste(xstring, zstring, sep = "+"), sep = "")), data = datalm)$coefficients
-          est.beta[j, ] <- lm.tr[[j]][2:(p + 1)]
+          cv.init0 <- cv.glmnet(train.data.cv$data.x[[j]], train.data.cv$data.y[[j]], nfolds = 8, lambda = seq(1, 0.1, length.out = 20) * sqrt(2 * log(p) / n.vec.cv[j]))
+          coef_lasso_all_cv[[j]] <- predict(cv.init0, s = "lambda.min", type = "coefficients")
+          est.beta[j, ] <- coef_lasso_all_cv[[j]][-1]
         }
         beta.est.train.mat <- NULL
         for (j in 1:s.cnt) {
-          beta.est.train.mat <- cbind(beta.est.train.mat, as.matrix(c(lm.tr[[1]][1], est.beta[j, ], lm.tr[[1]][(p + 2):length(lm.tr[[1]])])))
+          beta.est.train.mat <- cbind(beta.est.train.mat, as.matrix(c(coef_lasso_all_cv[[1]][1], est.beta[j, ])))
         }
-        q <- ncol(train.data$data.z[[1]])
-        bsz.tar <- NULL
-        for (j in 1:q) {
-          bsz.tar <- cbind(bsz.tar, bs(train.data$data.z[[1]][, j]))
-        }
-        data.merge.new <- cbind(train.data$data.x[[1]], bsz.tar)
-        pred.y <- t(c(1, data.merge.new[i, ]) %*% beta.est.train.mat)
+        pred.y <- t(c(1, train.data$data.x[[1]][i, ]) %*% beta.est.train.mat)
         proj.mat <- proj.mat + (pred.y - train.data$data.y[[1]][i] * matrix(1, s.cnt, 1)) %*% t(pred.y - train.data$data.y[[1]][i] * matrix(1, s.cnt, 1))
       }
 
@@ -160,37 +139,21 @@ trans.smap <- function(train.data, nfold = NULL, bs.para, lm.set = NULL) {
 
       for (i in 1:nfold) {
         train.data.cv <- train.data
+        train.data.cv$data.x[[1]] <- train.data.cv$data.x[[1]][-split[[i]], ]
+        train.data.cv$data.y[[1]] <- train.data.cv$data.y[[1]][-split[[i]], ]
+        n.vec.cv <- sapply(train.data.cv$data.x, function(x) nrow(x))
         est.beta <- matrix(NA, nrow = s.cnt, ncol = p)
-        lm.tr <- vector(mode = "list", length = s.cnt)
+        coef_lasso_all_cv <- vector(mode = "list", length = s.cnt)
         for (j in 1:s.cnt) {
-          if (j == 1) {
-            data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
-            data.merge.cv <- data.merge.cv[-split[[i]], ]
-          } else {
-            data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
-          }
-          qz <- ncol(train.data.cv$data.z[[j]])
-          datalm <- as.data.frame(data.merge.cv)
-          colnames(datalm) <- c("respon", paste("x", 1:p, sep = ""), paste("z", 1:qz, sep = ""))
-          xstring <- paste(paste("x", 1:p, sep = ""), collapse = "+")
-          zstring <- paste(paste(paste("bs(", paste(paste("z", 1:qz, sep = ""),
-            paste("df = bs.df[", 1:qz, "]", sep = ""),
-            paste("degree = bs.degree[", 1:qz, "]", sep = ""),
-            sep = ","
-          ), sep = ""), ")", sep = ""), collapse = "+")
-          lm.tr[[j]] <- lm(as.formula(paste("respon~", paste(xstring, zstring, sep = "+"), sep = "")), data = datalm)$coefficients
-          est.beta[j, ] <- lm.tr[[j]][2:(p + 1)]
+          cv.init0 <- cv.glmnet(train.data.cv$data.x[[j]], train.data.cv$data.y[[j]], nfolds = 8, lambda = seq(1, 0.1, length.out = 20) * sqrt(2 * log(p) / n.vec.cv[j]))
+          coef_lasso_all_cv[[j]] <- predict(cv.init0, s = "lambda.min", type = "coefficients")
+          est.beta[j, ] <- coef_lasso_all_cv[[j]][-1]
         }
         beta.est.train.mat <- NULL
         for (j in 1:s.cnt) {
-          beta.est.train.mat <- cbind(beta.est.train.mat, as.matrix(c(lm.tr[[1]][1], est.beta[j, ], lm.tr[[1]][(p + 2):length(lm.tr[[1]])])))
+          beta.est.train.mat <- cbind(beta.est.train.mat, as.matrix(c(coef_lasso_all_cv[[1]][1], est.beta[j, ])))
         }
-        q <- ncol(train.data$data.z[[1]])
-        bsz.tar <- NULL
-        for (j in 1:q) {
-          bsz.tar <- cbind(bsz.tar, bs(train.data$data.z[[1]][, j]))
-        }
-        data.merge.new <- cbind(as.matrix(rep(1, size.train[1])), train.data$data.x[[1]], bsz.tar)
+        data.merge.new <- cbind(as.matrix(rep(1, size.train[1])), train.data$data.x[[1]])
         pred.y <- data.merge.new[split[[i]], ] %*% beta.est.train.mat
         err.fold <- t(pred.y - train.data$data.y[[1]][split[[i]], ] %*% matrix(1, 1, s.cnt)) %*% (pred.y - train.data$data.y[[1]][split[[i]], ] %*% matrix(1, 1, s.cnt))
         proj.mat <- proj.mat + err.fold
@@ -214,27 +177,45 @@ trans.smap <- function(train.data, nfold = NULL, bs.para, lm.set = NULL) {
       }
     }
   } else {
-    ## jackknife
-    if (is.null(nfold)) {
-      timestart <- Sys.time()
-      proj.mat <- matrix(0, s.cnt, s.cnt)
-      for (i in 1:size.train[1]) {
-        train.data.cv <- train.data
-        est.beta <- matrix(NA, nrow = s.cnt, ncol = p)
-        lm.tr <- vector(mode = "list", length = s.cnt)
-        for (j in 1:s.cnt) {
-          if (j == 1) {
-            data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
-            data.merge.cv <- data.merge.cv[-i, ]
-          } else {
-            data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
-          }
-          qz <- ncol(train.data.cv$data.z[[j]])
-          datalm <- as.data.frame(data.merge.cv)
-          colnames(datalm) <- c("respon", paste("x", 1:p, sep = ""), paste("z", 1:qz, sep = ""))
-          if (j %in% lm.set) {
-            lm.tr[[j]] <- lm(respon ~ ., data = datalm)$coefficients
-          } else {
+    bs.df <- bs.para$bs.df
+    bs.degree <- bs.para$bs.degree
+    xstring <- paste(paste("x", 1:p, sep = ""), collapse = "+")
+    reg.res <- vector(mode = "list", length = s.cnt)
+    for (k in 1:s.cnt) {
+      data.merge <- cbind(train.data$data.y[[k]], train.data$data.x[[k]], train.data$data.z[[k]])
+      data.train.frame <- as.data.frame(data.merge)
+      colnames(data.train.frame) <- c("respon", paste("x", 1:p, sep = ""), paste("z", 1:ncol(train.data$data.z[[k]]), sep = ""))
+      if (k %in% lm.set) {
+        reg.res[[k]] <- lm(respon ~ ., data = data.train.frame)
+      } else {
+        zstring <- paste(paste(paste("bs(", paste(paste("z", 1:ncol(train.data$data.z[[k]]), sep = ""),
+          paste("df = bs.df[", 1:ncol(train.data$data.z[[k]]), "]", sep = ""),
+          paste("degree = bs.degree[", 1:ncol(train.data$data.z[[k]]), "]", sep = ""),
+          sep = ","
+        ), sep = ""), ")", sep = ""), collapse = "+")
+        reg.res[[k]] <- lm(as.formula(paste("respon~", paste(xstring, zstring, sep = "+"), sep = "")), data = data.train.frame)
+      }
+    }
+
+    if (is.null(lm.set)) {
+      ## jackknife
+      if (is.null(nfold)) {
+        timestart <- Sys.time()
+        proj.mat <- matrix(0, s.cnt, s.cnt)
+        for (i in 1:size.train[1]) {
+          train.data.cv <- train.data
+          est.beta <- matrix(NA, nrow = s.cnt, ncol = p)
+          lm.tr <- vector(mode = "list", length = s.cnt)
+          for (j in 1:s.cnt) {
+            if (j == 1) {
+              data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
+              data.merge.cv <- data.merge.cv[-i, ]
+            } else {
+              data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
+            }
+            qz <- ncol(train.data.cv$data.z[[j]])
+            datalm <- as.data.frame(data.merge.cv)
+            colnames(datalm) <- c("respon", paste("x", 1:p, sep = ""), paste("z", 1:qz, sep = ""))
             xstring <- paste(paste("x", 1:p, sep = ""), collapse = "+")
             zstring <- paste(paste(paste("bs(", paste(paste("z", 1:qz, sep = ""),
               paste("df = bs.df[", 1:qz, "]", sep = ""),
@@ -242,68 +223,60 @@ trans.smap <- function(train.data, nfold = NULL, bs.para, lm.set = NULL) {
               sep = ","
             ), sep = ""), ")", sep = ""), collapse = "+")
             lm.tr[[j]] <- lm(as.formula(paste("respon~", paste(xstring, zstring, sep = "+"), sep = "")), data = datalm)$coefficients
+            est.beta[j, ] <- lm.tr[[j]][2:(p + 1)]
           }
-          est.beta[j, ] <- lm.tr[[j]][2:(p + 1)]
-        }
-        beta.est.train.mat <- NULL
-        for (j in 1:s.cnt) {
-          beta.est.train.mat <- cbind(beta.est.train.mat, as.matrix(c(lm.tr[[1]][1], est.beta[j, ], lm.tr[[1]][(p + 2):length(lm.tr[[1]])])))
-        }
-        q <- ncol(train.data$data.z[[1]])
-        if (1 %in% lm.set) {
-          data.merge.new <- cbind(train.data$data.x[[1]], train.data$data.z[[1]])
-        } else {
+          beta.est.train.mat <- NULL
+          for (j in 1:s.cnt) {
+            beta.est.train.mat <- cbind(beta.est.train.mat, as.matrix(c(lm.tr[[1]][1], est.beta[j, ], lm.tr[[1]][(p + 2):length(lm.tr[[1]])])))
+          }
+          q <- ncol(train.data$data.z[[1]])
           bsz.tar <- NULL
           for (j in 1:q) {
             bsz.tar <- cbind(bsz.tar, bs(train.data$data.z[[1]][, j]))
           }
           data.merge.new <- cbind(train.data$data.x[[1]], bsz.tar)
+          pred.y <- t(c(1, data.merge.new[i, ]) %*% beta.est.train.mat)
+          proj.mat <- proj.mat + (pred.y - train.data$data.y[[1]][i] * matrix(1, s.cnt, 1)) %*% t(pred.y - train.data$data.y[[1]][i] * matrix(1, s.cnt, 1))
         }
-        pred.y <- t(c(1, data.merge.new[i, ]) %*% beta.est.train.mat)
-        proj.mat <- proj.mat + (pred.y - train.data$data.y[[1]][i] * matrix(1, s.cnt, 1)) %*% t(pred.y - train.data$data.y[[1]][i] * matrix(1, s.cnt, 1))
+
+        Dmat <- proj.mat / size.train[1]
+        d <- rep(0, s.cnt)
+        Amat <- t(rbind(matrix(1, nrow = 1, ncol = s.cnt), diag(s.cnt), -diag(s.cnt)))
+        bvec <- rbind(1, matrix(0, nrow = s.cnt, ncol = 1), matrix(-1, nrow = s.cnt, ncol = 1))
+        solve.qr <- try(
+          {
+            solve.QP(Dmat, d, Amat, bvec, meq = 1)
+          },
+          silent = TRUE
+        )
+        time.transsmap <- as.double(difftime(Sys.time(), timestart, units = "secs"))
+        if ("try-error" %in% class(solve.qr)) {
+          return(list(weight.est = NA, time.transsmap = time.transsmap, reg.res = reg.res))
+        } else {
+          return(list(weight.est = solve.qr$solution, time.transsmap = time.transsmap, reg.res = reg.res))
+        }
       }
 
-      Dmat <- proj.mat / size.train[1]
-      d <- rep(0, s.cnt)
-      Amat <- t(rbind(matrix(1, nrow = 1, ncol = s.cnt), diag(s.cnt), -diag(s.cnt)))
-      bvec <- rbind(1, matrix(0, nrow = s.cnt, ncol = 1), matrix(-1, nrow = s.cnt, ncol = 1))
-      solve.qr <- try(
-        {
-          solve.QP(Dmat, d, Amat, bvec, meq = 1)
-        },
-        silent = TRUE
-      )
-      time.transsmap <- as.double(difftime(Sys.time(), timestart, units = "secs"))
-      if ("try-error" %in% class(solve.qr)) {
-        return(list(weight.est = NA, time.transsmap = time.transsmap, reg.res = reg.res))
-      } else {
-        return(list(weight.est = solve.qr$solution, time.transsmap = time.transsmap, reg.res = reg.res))
-      }
-    }
+      ## k-fold
+      else {
+        timestart <- Sys.time()
+        proj.mat <- matrix(0, s.cnt, s.cnt)
+        split <- createFolds(train.data$data.y[[1]], k = nfold)
 
-    ## k-fold
-    else {
-      timestart <- Sys.time()
-      proj.mat <- matrix(0, s.cnt, s.cnt)
-      split <- createFolds(train.data$data.y[[1]], k = nfold)
-
-      for (i in 1:nfold) {
-        train.data.cv <- train.data
-        est.beta <- matrix(NA, nrow = s.cnt, ncol = p)
-        lm.tr <- vector(mode = "list", length = s.cnt)
-        for (j in 1:s.cnt) {
-          if (j == 1) {
-            data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
-            data.merge.cv <- data.merge.cv[-split[[i]], ]
-          } else {
-            data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
-          }
-          qz <- ncol(train.data.cv$data.z[[j]])
-          datalm <- as.data.frame(data.merge.cv)
-          colnames(datalm) <- c("respon", paste("x", 1:p, sep = ""), paste("z", 1:qz, sep = ""))
-          if (j %in% lm.set) {
-            lm.tr[[j]] <- lm(respon ~ ., data = datalm)$coefficients
-          } else {
+        for (i in 1:nfold) {
+          train.data.cv <- train.data
+          est.beta <- matrix(NA, nrow = s.cnt, ncol = p)
+          lm.tr <- vector(mode = "list", length = s.cnt)
+          for (j in 1:s.cnt) {
+            if (j == 1) {
+              data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
+              data.merge.cv <- data.merge.cv[-split[[i]], ]
+            } else {
+              data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
+            }
+            qz <- ncol(train.data.cv$data.z[[j]])
+            datalm <- as.data.frame(data.merge.cv)
+            colnames(datalm) <- c("respon", paste("x", 1:p, sep = ""), paste("z", 1:qz, sep = ""))
             xstring <- paste(paste("x", 1:p, sep = ""), collapse = "+")
             zstring <- paste(paste(paste("bs(", paste(paste("z", 1:qz, sep = ""),
               paste("df = bs.df[", 1:qz, "]", sep = ""),
@@ -311,43 +284,176 @@ trans.smap <- function(train.data, nfold = NULL, bs.para, lm.set = NULL) {
               sep = ","
             ), sep = ""), ")", sep = ""), collapse = "+")
             lm.tr[[j]] <- lm(as.formula(paste("respon~", paste(xstring, zstring, sep = "+"), sep = "")), data = datalm)$coefficients
+            est.beta[j, ] <- lm.tr[[j]][2:(p + 1)]
           }
-          est.beta[j, ] <- lm.tr[[j]][2:(p + 1)]
-        }
-        beta.est.train.mat <- NULL
-        for (j in 1:s.cnt) {
-          beta.est.train.mat <- cbind(beta.est.train.mat, as.matrix(c(lm.tr[[1]][1], est.beta[j, ], lm.tr[[1]][(p + 2):length(lm.tr[[1]])])))
-        }
-        q <- ncol(train.data$data.z[[1]])
-        if (1 %in% lm.set) {
-          data.merge.new <- cbind(1, train.data$data.x[[1]], train.data$data.z[[1]])
-        } else {
+          beta.est.train.mat <- NULL
+          for (j in 1:s.cnt) {
+            beta.est.train.mat <- cbind(beta.est.train.mat, as.matrix(c(lm.tr[[1]][1], est.beta[j, ], lm.tr[[1]][(p + 2):length(lm.tr[[1]])])))
+          }
+          q <- ncol(train.data$data.z[[1]])
           bsz.tar <- NULL
           for (j in 1:q) {
             bsz.tar <- cbind(bsz.tar, bs(train.data$data.z[[1]][, j]))
           }
           data.merge.new <- cbind(as.matrix(rep(1, size.train[1])), train.data$data.x[[1]], bsz.tar)
+          pred.y <- data.merge.new[split[[i]], ] %*% beta.est.train.mat
+          err.fold <- t(pred.y - train.data$data.y[[1]][split[[i]], ] %*% matrix(1, 1, s.cnt)) %*% (pred.y - train.data$data.y[[1]][split[[i]], ] %*% matrix(1, 1, s.cnt))
+          proj.mat <- proj.mat + err.fold
         }
-        pred.y <- data.merge.new[split[[i]], ] %*% beta.est.train.mat
-        err.fold <- t(pred.y - train.data$data.y[[1]][split[[i]], ] %*% matrix(1, 1, s.cnt)) %*% (pred.y - train.data$data.y[[1]][split[[i]], ] %*% matrix(1, 1, s.cnt))
-        proj.mat <- proj.mat + err.fold
+
+        Dmat <- proj.mat / size.train[1]
+        d <- rep(0, s.cnt)
+        Amat <- t(rbind(matrix(1, nrow = 1, ncol = s.cnt), diag(s.cnt), -diag(s.cnt)))
+        bvec <- rbind(1, matrix(0, nrow = s.cnt, ncol = 1), matrix(-1, nrow = s.cnt, ncol = 1))
+        solve.qr <- try(
+          {
+            solve.QP(Dmat, d, Amat, bvec, meq = 1)
+          },
+          silent = TRUE
+        )
+        time.transsmap <- as.double(difftime(Sys.time(), timestart, units = "secs"))
+        if ("try-error" %in% class(solve.qr)) {
+          return(list(weight.est = NA, time.transsmap = time.transsmap, reg.res = reg.res))
+        } else {
+          return(list(weight.est = solve.qr$solution, time.transsmap = time.transsmap, reg.res = reg.res))
+        }
+      }
+    } else {
+      ## jackknife
+      if (is.null(nfold)) {
+        timestart <- Sys.time()
+        proj.mat <- matrix(0, s.cnt, s.cnt)
+        for (i in 1:size.train[1]) {
+          train.data.cv <- train.data
+          est.beta <- matrix(NA, nrow = s.cnt, ncol = p)
+          lm.tr <- vector(mode = "list", length = s.cnt)
+          for (j in 1:s.cnt) {
+            if (j == 1) {
+              data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
+              data.merge.cv <- data.merge.cv[-i, ]
+            } else {
+              data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
+            }
+            qz <- ncol(train.data.cv$data.z[[j]])
+            datalm <- as.data.frame(data.merge.cv)
+            colnames(datalm) <- c("respon", paste("x", 1:p, sep = ""), paste("z", 1:qz, sep = ""))
+            if (j %in% lm.set) {
+              lm.tr[[j]] <- lm(respon ~ ., data = datalm)$coefficients
+            } else {
+              xstring <- paste(paste("x", 1:p, sep = ""), collapse = "+")
+              zstring <- paste(paste(paste("bs(", paste(paste("z", 1:qz, sep = ""),
+                paste("df = bs.df[", 1:qz, "]", sep = ""),
+                paste("degree = bs.degree[", 1:qz, "]", sep = ""),
+                sep = ","
+              ), sep = ""), ")", sep = ""), collapse = "+")
+              lm.tr[[j]] <- lm(as.formula(paste("respon~", paste(xstring, zstring, sep = "+"), sep = "")), data = datalm)$coefficients
+            }
+            est.beta[j, ] <- lm.tr[[j]][2:(p + 1)]
+          }
+          beta.est.train.mat <- NULL
+          for (j in 1:s.cnt) {
+            beta.est.train.mat <- cbind(beta.est.train.mat, as.matrix(c(lm.tr[[1]][1], est.beta[j, ], lm.tr[[1]][(p + 2):length(lm.tr[[1]])])))
+          }
+          q <- ncol(train.data$data.z[[1]])
+          if (1 %in% lm.set) {
+            data.merge.new <- cbind(train.data$data.x[[1]], train.data$data.z[[1]])
+          } else {
+            bsz.tar <- NULL
+            for (j in 1:q) {
+              bsz.tar <- cbind(bsz.tar, bs(train.data$data.z[[1]][, j]))
+            }
+            data.merge.new <- cbind(train.data$data.x[[1]], bsz.tar)
+          }
+          pred.y <- t(c(1, data.merge.new[i, ]) %*% beta.est.train.mat)
+          proj.mat <- proj.mat + (pred.y - train.data$data.y[[1]][i] * matrix(1, s.cnt, 1)) %*% t(pred.y - train.data$data.y[[1]][i] * matrix(1, s.cnt, 1))
+        }
+
+        Dmat <- proj.mat / size.train[1]
+        d <- rep(0, s.cnt)
+        Amat <- t(rbind(matrix(1, nrow = 1, ncol = s.cnt), diag(s.cnt), -diag(s.cnt)))
+        bvec <- rbind(1, matrix(0, nrow = s.cnt, ncol = 1), matrix(-1, nrow = s.cnt, ncol = 1))
+        solve.qr <- try(
+          {
+            solve.QP(Dmat, d, Amat, bvec, meq = 1)
+          },
+          silent = TRUE
+        )
+        time.transsmap <- as.double(difftime(Sys.time(), timestart, units = "secs"))
+        if ("try-error" %in% class(solve.qr)) {
+          return(list(weight.est = NA, time.transsmap = time.transsmap, reg.res = reg.res))
+        } else {
+          return(list(weight.est = solve.qr$solution, time.transsmap = time.transsmap, reg.res = reg.res))
+        }
       }
 
-      Dmat <- proj.mat / size.train[1]
-      d <- rep(0, s.cnt)
-      Amat <- t(rbind(matrix(1, nrow = 1, ncol = s.cnt), diag(s.cnt), -diag(s.cnt)))
-      bvec <- rbind(1, matrix(0, nrow = s.cnt, ncol = 1), matrix(-1, nrow = s.cnt, ncol = 1))
-      solve.qr <- try(
-        {
-          solve.QP(Dmat, d, Amat, bvec, meq = 1)
-        },
-        silent = TRUE
-      )
-      time.transsmap <- as.double(difftime(Sys.time(), timestart, units = "secs"))
-      if ("try-error" %in% class(solve.qr)) {
-        return(list(weight.est = NA, time.transsmap = time.transsmap, reg.res = reg.res))
-      } else {
-        return(list(weight.est = solve.qr$solution, time.transsmap = time.transsmap, reg.res = reg.res))
+      ## k-fold
+      else {
+        timestart <- Sys.time()
+        proj.mat <- matrix(0, s.cnt, s.cnt)
+        split <- createFolds(train.data$data.y[[1]], k = nfold)
+
+        for (i in 1:nfold) {
+          train.data.cv <- train.data
+          est.beta <- matrix(NA, nrow = s.cnt, ncol = p)
+          lm.tr <- vector(mode = "list", length = s.cnt)
+          for (j in 1:s.cnt) {
+            if (j == 1) {
+              data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
+              data.merge.cv <- data.merge.cv[-split[[i]], ]
+            } else {
+              data.merge.cv <- cbind(train.data$data.y[[j]], train.data$data.x[[j]], train.data$data.z[[j]])
+            }
+            qz <- ncol(train.data.cv$data.z[[j]])
+            datalm <- as.data.frame(data.merge.cv)
+            colnames(datalm) <- c("respon", paste("x", 1:p, sep = ""), paste("z", 1:qz, sep = ""))
+            if (j %in% lm.set) {
+              lm.tr[[j]] <- lm(respon ~ ., data = datalm)$coefficients
+            } else {
+              xstring <- paste(paste("x", 1:p, sep = ""), collapse = "+")
+              zstring <- paste(paste(paste("bs(", paste(paste("z", 1:qz, sep = ""),
+                paste("df = bs.df[", 1:qz, "]", sep = ""),
+                paste("degree = bs.degree[", 1:qz, "]", sep = ""),
+                sep = ","
+              ), sep = ""), ")", sep = ""), collapse = "+")
+              lm.tr[[j]] <- lm(as.formula(paste("respon~", paste(xstring, zstring, sep = "+"), sep = "")), data = datalm)$coefficients
+            }
+            est.beta[j, ] <- lm.tr[[j]][2:(p + 1)]
+          }
+          beta.est.train.mat <- NULL
+          for (j in 1:s.cnt) {
+            beta.est.train.mat <- cbind(beta.est.train.mat, as.matrix(c(lm.tr[[1]][1], est.beta[j, ], lm.tr[[1]][(p + 2):length(lm.tr[[1]])])))
+          }
+          q <- ncol(train.data$data.z[[1]])
+          if (1 %in% lm.set) {
+            data.merge.new <- cbind(1, train.data$data.x[[1]], train.data$data.z[[1]])
+          } else {
+            bsz.tar <- NULL
+            for (j in 1:q) {
+              bsz.tar <- cbind(bsz.tar, bs(train.data$data.z[[1]][, j]))
+            }
+            data.merge.new <- cbind(as.matrix(rep(1, size.train[1])), train.data$data.x[[1]], bsz.tar)
+          }
+          pred.y <- data.merge.new[split[[i]], ] %*% beta.est.train.mat
+          err.fold <- t(pred.y - train.data$data.y[[1]][split[[i]], ] %*% matrix(1, 1, s.cnt)) %*% (pred.y - train.data$data.y[[1]][split[[i]], ] %*% matrix(1, 1, s.cnt))
+          proj.mat <- proj.mat + err.fold
+        }
+
+        Dmat <- proj.mat / size.train[1]
+        d <- rep(0, s.cnt)
+        Amat <- t(rbind(matrix(1, nrow = 1, ncol = s.cnt), diag(s.cnt), -diag(s.cnt)))
+        bvec <- rbind(1, matrix(0, nrow = s.cnt, ncol = 1), matrix(-1, nrow = s.cnt, ncol = 1))
+        solve.qr <- try(
+          {
+            solve.QP(Dmat, d, Amat, bvec, meq = 1)
+          },
+          silent = TRUE
+        )
+        time.transsmap <- as.double(difftime(Sys.time(), timestart, units = "secs"))
+        if ("try-error" %in% class(solve.qr)) {
+          return(list(weight.est = NA, time.transsmap = time.transsmap, reg.res = reg.res))
+        } else {
+          return(list(weight.est = solve.qr$solution, time.transsmap = time.transsmap, reg.res = reg.res))
+        }
       }
     }
   }

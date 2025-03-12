@@ -1,6 +1,6 @@
 Package: matrans
 Title: Model Averaging-Assisted Optimal Transfer Learning
-Version: 0.1.0
+Version: 0.2.0
 Authors@R: 
     c(person("Xiaonan", "Hu", , "xiaonanhu@cnu.edu.cn", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0001-7614-2249")),
@@ -9,14 +9,14 @@ Description: Transfer learning, as a prevailing technique in computer sciences, 
 License: GPL (>= 3)
 Encoding: UTF-8
 RoxygenNote: 7.2.3
-Imports: caret, formatR, MASS, quadprog, splines, stats
+Imports: caret, formatR, glmnet, MASS, quadprog, splines, stats
 Suggests: knitr, rmarkdown
 Depends: R (>= 2.10)
 VignetteBuilder: knitr
 NeedsCompilation: no
-Packaged: 2024-01-12 10:47:35 UTC; huxiaonan
+Packaged: 2025-03-12 00:54:55 UTC; huxiaonan
 Author: Xiaonan Hu [aut, cre] (<https://orcid.org/0000-0001-7614-2249>),
   Xinyu Zhang [aut]
 Maintainer: Xiaonan Hu <xiaonanhu@cnu.edu.cn>
 Repository: CRAN
-Date/Publication: 2024-01-12 16:30:06 UTC
+Date/Publication: 2025-03-12 03:10:02 UTC

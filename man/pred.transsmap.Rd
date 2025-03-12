@@ -4,7 +4,7 @@
 \alias{pred.transsmap}
 \title{Prediction for new data based on Trans-SMAP.}
 \usage{
-pred.transsmap(object, newdata, bs.para, if.lm = FALSE)
+pred.transsmap(object, newdata, bs.para, if.lm = FALSE, if.penalty = FALSE)
 }
 \arguments{
 \item{object}{the output of function \code{trans.smap}.}
@@ -18,6 +18,8 @@ pred.transsmap(object, newdata, bs.para, if.lm = FALSE)
 }}
 
 \item{if.lm}{the logical variable, whether to set the target model as ordinary linear model. Default is False.}
+
+\item{if.penalty}{If TRUE,then LASSO estimation is done under the linear regression settings, and the "newdata" only constains "data.x". Default is FALSE.}
 }
 \value{
 a result list containing the predicted values on new data and the estimated coefficient vector.
